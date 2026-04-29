@@ -1,0 +1,11 @@
+numpy>=1.26.4
+scipy>=1.15.3
+matplotlib>=3.10.8
+casadi>=3.7.2
+
+# acados_template is installed from the acados source tree, not PyPI.
+# Follow: https://docs.acados.org/installation/index.html
+# acados_template>=0.5.1
+
+# Testing
+pytest>=8.4.2
