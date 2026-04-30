@@ -29,7 +29,7 @@ import numpy as np
 from enum import Enum, auto
 from typing import List, Dict
 
-from .curvature import CurvatureEstimator, ENTER_THRESHOLD, EXIT_THRESHOLD
+from .curvature import CurvatureEstimator
 from .state_handoff import handoff
 
 BLEND_WINDOW  = 5       # steps for output blending at transitions
@@ -55,7 +55,10 @@ class FSM:
                  warmup_ctrl: str = 'stanley',
                  straight_ctrl: str = 'lqr',
                  curve_ctrl: str = 'mpc',
-                 fallback_ctrl: str = 'stanley'):
+                 fallback_ctrl: str = 'stanley',
+                 confirm_steps: int = CONFIRM_STEPS,
+                 blend_window: int = BLEND_WINDOW,
+                 log_fn=print):
         for slot, val in [('warmup', warmup_ctrl), ('straight', straight_ctrl),
                           ('curve', curve_ctrl),   ('fallback', fallback_ctrl)]:
             if val not in _VALID_CTRLS:
@@ -70,6 +73,9 @@ class FSM:
         self._straight_ctrl  = straight_ctrl
         self._curve_ctrl     = curve_ctrl
         self._fallback_ctrl  = fallback_ctrl
+        self._confirm_steps  = confirm_steps
+        self._blend_window   = blend_window
+        self._log_fn         = log_fn
 
         self.state = KAYNState.WARMUP
         self._warmup_count   = 0
@@ -120,9 +126,9 @@ class FSM:
 
     def _step_straight(self, x_curr, trajectory, ref_idx, kappa) -> np.ndarray:
         u, _, _ = self._ctrl_u(self._straight_ctrl, x_curr, trajectory, ref_idx)
-        if kappa > ENTER_THRESHOLD:
+        if kappa > self.curv_est.enter_threshold:
             self._confirm_count += 1
-            if self._confirm_count >= CONFIRM_STEPS:
+            if self._confirm_count >= self._confirm_steps:
                 self._transition(KAYNState.BLEND_OUT,
                                  f"kappa={kappa:.3f}", x_curr, trajectory, ref_idx)
         else:
@@ -130,12 +136,12 @@ class FSM:
         return u
 
     def _step_blend_out(self, x_curr, trajectory, ref_idx) -> np.ndarray:
-        alpha = self._blend_step / BLEND_WINDOW
+        alpha = self._blend_step / self._blend_window
         u_out, _, _ = self._ctrl_u(self._straight_ctrl, x_curr, trajectory, ref_idx)
         u_in,  _, _ = self._ctrl_u(self._curve_ctrl,    x_curr, trajectory, ref_idx)
         u = (1 - alpha) * u_out + alpha * u_in
         self._blend_step += 1
-        if self._blend_step >= BLEND_WINDOW:
+        if self._blend_step >= self._blend_window:
             self._transition(KAYNState.CURVE, "blend_complete", x_curr, trajectory, ref_idx)
         return u
 
@@ -149,9 +155,9 @@ class FSM:
             u_fb, _, _ = self._ctrl_u(self._fallback_ctrl, x_curr, trajectory, ref_idx)
             return u_fb
 
-        if kappa < EXIT_THRESHOLD:
+        if kappa < self.curv_est.exit_threshold:
             self._confirm_count += 1
-            if self._confirm_count >= CONFIRM_STEPS:
+            if self._confirm_count >= self._confirm_steps:
                 self._transition(KAYNState.BLEND_IN, f"kappa={kappa:.3f}",
                                  x_curr, trajectory, ref_idx)
         else:
@@ -159,12 +165,12 @@ class FSM:
         return u
 
     def _step_blend_in(self, x_curr, trajectory, ref_idx) -> np.ndarray:
-        alpha = self._blend_step / BLEND_WINDOW
+        alpha = self._blend_step / self._blend_window
         u_out, _, _ = self._ctrl_u(self._curve_ctrl,    x_curr, trajectory, ref_idx)
         u_in,  _, _ = self._ctrl_u(self._straight_ctrl, x_curr, trajectory, ref_idx)
         u = (1 - alpha) * u_out + alpha * u_in
         self._blend_step += 1
-        if self._blend_step >= BLEND_WINDOW:
+        if self._blend_step >= self._blend_window:
             self._transition(KAYNState.STRAIGHT, "blend_complete", x_curr, trajectory, ref_idx)
         return u
 
@@ -185,8 +191,8 @@ class FSM:
             except Exception:
                 self._recovery_count = 0
 
-            if self._recovery_count >= CONFIRM_STEPS:
-                target = KAYNState.CURVE if kappa > ENTER_THRESHOLD else KAYNState.STRAIGHT
+            if self._recovery_count >= self._confirm_steps:
+                target = KAYNState.CURVE if kappa > self.curv_est.enter_threshold else KAYNState.STRAIGHT
                 self._transition(target, f"solver_recovered kappa={kappa:.3f}",
                                  x_curr, trajectory, ref_idx)
         return u
@@ -214,7 +220,7 @@ class FSM:
     def _transition(self, new_state: KAYNState, reason: str,
                     x_curr: np.ndarray, trajectory: List[Dict],
                     ref_idx: int) -> None:
-        print(f"[KAYN] {self.state.name} → {new_state.name} | {reason} | idx={ref_idx}")
+        self._log_fn(f"[KAYN] {self.state.name} → {new_state.name} | {reason} | idx={ref_idx}")
         self.state = new_state
         self._confirm_count  = 0
         self._blend_step     = 0
