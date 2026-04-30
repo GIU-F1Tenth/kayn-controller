@@ -101,39 +101,105 @@ kayn_controller/
 
 ## Configuration
 
-All parameters live in `config/kayn_params.yaml`. The key ones:
+All parameters live in `config/kayn_params.yaml`. The node declares every parameter
+with a default so the file can be used as a drop-in override or omitted entirely.
 
-```yaml
-# Controller assigned to each FSM state — "stanley" | "lqr" | "mpc"
-fsm.warmup_controller:   "stanley"
-fsm.straight_controller: "lqr"
-fsm.curve_controller:    "mpc"
-fsm.fallback_controller: "stanley"
+### Vehicle
 
-# Warmup duration
-fsm.warmup_steps: 50          # steps before handing off to straight controller
+| Parameter | Default | Description |
+|---|---|---|
+| `wheelbase` | `0.33` m | Kinematic model parameter; must match the physical car |
+| `dt` | `0.005` s | Integration timestep; must equal `1 / control_hz` |
+| `control_hz` | `200.0` Hz | Control loop rate |
 
-# Curvature thresholds
-fsm.enter_threshold: 0.10     # κ [rad/m] to enter CURVE  (R < 10m)
-fsm.exit_threshold:  0.06     # κ [rad/m] to leave CURVE  (R > 16.7m)
+### FSM — controller slots
 
-# LQR weights
-lqr.q_px: 5.0   lqr.q_py: 5.0   lqr.q_theta: 6.0   lqr.q_v: 1.0
-lqr.r_delta: 4.0   lqr.r_a: 0.3
+Each FSM state runs an independently chosen controller. Valid values: `"stanley"` \| `"lqr"` \| `"mpc"`
 
-# MPC
-mpc.horizon_n: 20
-mpc.timeout_ms: 5.0           # solver budget before FALLBACK triggers
-```
+| Parameter | Default | State it governs |
+|---|---|---|
+| `fsm.warmup_controller` | `"stanley"` | WARMUP |
+| `fsm.straight_controller` | `"lqr"` | STRAIGHT |
+| `fsm.curve_controller` | `"mpc"` | CURVE |
+| `fsm.fallback_controller` | `"stanley"` | FALLBACK |
 
-**Common overrides:**
+### FSM — timing
+
+| Parameter | Default | Effect |
+|---|---|---|
+| `fsm.warmup_steps` | `50` | Steps before leaving WARMUP. At 200 Hz, 50 steps = 0.25 s |
+| `fsm.confirm_steps` | `3` | Consecutive samples required before any state transition. Raise to reduce false triggers on noisy curvature |
+| `fsm.blend_window` | `5` | Steps over which output is linearly interpolated at transitions. Raise for smoother handoff, lower for faster response |
+
+### Curvature detection
+
+Menger curvature κ = 1/R [rad/m] estimated over a lookahead window ahead of the current waypoint.
+
+| Parameter | Default | Effect |
+|---|---|---|
+| `fsm.enter_threshold` | `0.10` rad/m | κ above which CURVE is entered (R < 10 m). Lower to detect curves earlier |
+| `fsm.exit_threshold` | `0.06` rad/m | κ below which STRAIGHT re-enters (R > 16.7 m). Must be strictly less than `enter_threshold` — closing the gap causes rapid oscillation at curve boundaries |
+| `fsm.lookahead` | `10` | Waypoints ahead used for the estimate. Raise for earlier detection, lower for a more local view |
+
+### Stanley
+
+| Parameter | Default | Effect |
+|---|---|---|
+| `stanley.k` | `1.5` | Cross-track gain. Raise for tighter lateral tracking, lower if the car oscillates at speed |
+
+### LQR — weights
+
+`Q = diag([q_px, q_py, q_theta, q_v])` penalises state error.
+`R = diag([r_delta, r_a])` penalises control effort.
+
+| Parameter | Default | Effect |
+|---|---|---|
+| `lqr.q_px` | `5.0` | Position error penalty (longitudinal) |
+| `lqr.q_py` | `5.0` | Position error penalty (lateral). Raise to tighten lateral tracking on straights |
+| `lqr.q_theta` | `6.0` | Heading error penalty. Raise if the car wanders angularly |
+| `lqr.q_v` | `1.0` | Speed error penalty. Raise to follow the reference speed more closely |
+| `lqr.r_delta` | `4.0` | Steering effort penalty. Raise to damp oscillations on straights |
+| `lqr.r_a` | `0.3` | Acceleration effort penalty. Raise for a smoother acceleration profile |
+
+### MPC — weights
+
+Same Q/R semantics as LQR.
+
+| Parameter | Default | Effect |
+|---|---|---|
+| `mpc.q_px` | `5.0` | Position error penalty (longitudinal) |
+| `mpc.q_py` | `5.0` | Position error penalty (lateral) |
+| `mpc.q_theta` | `6.0` | Heading error penalty |
+| `mpc.q_v` | `6.0` | Speed error penalty. Set higher than LQR to prevent MPC from overspeeding on curves |
+| `mpc.r_delta` | `4.0` | Steering effort penalty. Raise (e.g. `8.0`) to smooth steering on tight curves |
+| `mpc.r_a` | `0.3` | Acceleration effort penalty |
+
+### MPC — solver
+
+| Parameter | Default | Effect |
+|---|---|---|
+| `mpc.horizon_n` | `20` | Prediction horizon steps. Longer horizon sees further ahead but increases solve time |
+| `mpc.timeout_ms` | `5.0` ms | Solver budget. If exceeded, FSM transitions to FALLBACK. Raise (e.g. `10.0`) if MPC triggers false fallbacks at high speed |
+
+### Speed / limits
+
+| Parameter | Default | Effect |
+|---|---|---|
+| `max_speed` | `8.0` m/s | Hard cap applied to the trajectory speed setpoint |
+| `max_steering` | `0.4189` rad | Must match `DELTA_MAX` in `bicycle_model.py` (24°) |
+| `max_accel` | `5.0` m/s² | Hard acceleration cap |
+
+### Common recipes
+
 | Goal | Change |
 |---|---|
-| Pure LQR everywhere | `curve_controller: "lqr"` |
-| Pure Stanley | `straight_controller: "stanley"`, `curve_controller: "stanley"` |
-| No warmup | `fsm.warmup_steps: 0` (transitions immediately) |
-| Smoother MPC | increase `mpc.r_delta` (e.g. `8.0`) |
-| Tighter straight tracking | increase `lqr.q_py` (e.g. `10.0`) |
+| Pure LQR everywhere | `fsm.curve_controller: "lqr"` |
+| Pure Stanley | `fsm.straight_controller: "stanley"`, `fsm.curve_controller: "stanley"` |
+| Skip warmup | `fsm.warmup_steps: 0` |
+| Detect curves earlier | lower `fsm.enter_threshold` (e.g. `0.07`) |
+| Smoother MPC steering | raise `mpc.r_delta` (e.g. `8.0`) |
+| Tighter straight tracking | raise `lqr.q_py` (e.g. `10.0`) |
+| Prevent MPC fallback | raise `mpc.timeout_ms` (e.g. `10.0`) |
 
 ---
 
