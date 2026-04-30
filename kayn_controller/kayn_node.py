@@ -60,6 +60,9 @@ class KAYNNode(Node):
             f"curve={self.curve_ctrl} fallback={self.fallback_ctrl}"
         )
 
+    def _p(self, name: str):
+        return self.get_parameter(name).value
+
     def _declare_params(self):
         p = self.declare_parameter
         p('wheelbase', 0.33);         p('dt', 0.02)
@@ -88,39 +91,59 @@ class KAYNNode(Node):
         p('debug', False);            p('log_every_n', 25)
 
     def _load_params(self):
-        g = lambda n: self.get_parameter(n).value
-        self.wheelbase    = g('wheelbase');    self.dt          = g('dt')
-        self.mpc_n        = g('mpc.horizon_n')
-        self.max_speed    = g('max_speed');    self.max_steering = g('max_steering')
-        self.max_accel    = g('max_accel');    self.control_hz  = g('control_hz')
-        self.odom_topic   = g('odom_topic');   self.traj_topic  = g('trajectory_topic')
-        self.ready_topic  = g('path_ready_topic'); self.drive_topic = g('drive_topic')
-        self.debug        = g('debug');        self.log_every_n = g('log_every_n')
+        self.wheelbase     = self._p('wheelbase')
+        self.dt            = self._p('dt')
+        self.mpc_n         = self._p('mpc.horizon_n')
+        self.max_speed     = self._p('max_speed')
+        self.max_steering  = self._p('max_steering')
+        self.max_accel     = self._p('max_accel')
+        self.control_hz    = self._p('control_hz')
+        self.odom_topic    = self._p('odom_topic')
+        self.traj_topic    = self._p('trajectory_topic')
+        self.ready_topic   = self._p('path_ready_topic')
+        self.drive_topic   = self._p('drive_topic')
+        self.debug         = self._p('debug')
+        self.log_every_n   = self._p('log_every_n')
 
-        self.lqr_Q = np.diag([g('lqr.q_px'), g('lqr.q_py'), g('lqr.q_theta'), g('lqr.q_v')])
-        self.lqr_R = np.diag([g('lqr.r_delta'), g('lqr.r_a')])
-        self.mpc_Q = np.diag([g('mpc.q_px'), g('mpc.q_py'), g('mpc.q_theta'), g('mpc.q_v')])
-        self.mpc_R = np.diag([g('mpc.r_delta'), g('mpc.r_a')])
-        self.stanley_k      = g('stanley.k')
-        self.warmup_ctrl    = g('fsm.warmup_controller')
-        self.straight_ctrl  = g('fsm.straight_controller')
-        self.curve_ctrl     = g('fsm.curve_controller')
-        self.fallback_ctrl  = g('fsm.fallback_controller')
-        self.warmup_steps   = g('fsm.warmup_steps')
-        self.curv_lookahead = g('fsm.lookahead')
+        self.lqr_Q = np.diag([self._p('lqr.q_px'), self._p('lqr.q_py'),
+                               self._p('lqr.q_theta'), self._p('lqr.q_v')])
+        self.lqr_R = np.diag([self._p('lqr.r_delta'), self._p('lqr.r_a')])
+        self.mpc_Q = np.diag([self._p('mpc.q_px'), self._p('mpc.q_py'),
+                               self._p('mpc.q_theta'), self._p('mpc.q_v')])
+        self.mpc_R = np.diag([self._p('mpc.r_delta'), self._p('mpc.r_a')])
+
+        self.stanley_k      = self._p('stanley.k')
+        self.warmup_ctrl    = self._p('fsm.warmup_controller')
+        self.straight_ctrl  = self._p('fsm.straight_controller')
+        self.curve_ctrl     = self._p('fsm.curve_controller')
+        self.fallback_ctrl  = self._p('fsm.fallback_controller')
+        self.warmup_steps   = self._p('fsm.warmup_steps')
+        self.confirm_steps  = self._p('fsm.confirm_steps')
+        self.blend_window   = self._p('fsm.blend_window')
+        self.curv_lookahead = self._p('fsm.lookahead')
+        self.enter_threshold = self._p('fsm.enter_threshold')
+        self.exit_threshold  = self._p('fsm.exit_threshold')
 
     def _build_controllers(self):
         model = BicycleModel(L=self.wheelbase, dt=self.dt)
+        curv_est = CurvatureEstimator(
+            lookahead=self.curv_lookahead,
+            enter_threshold=self.enter_threshold,
+            exit_threshold=self.exit_threshold,
+        )
         self.fsm = FSM(
             lqr=LQRController(model, Q=self.lqr_Q, R=self.lqr_R),
             mpc=MPCController(model, N=self.mpc_n, Q=self.mpc_Q, R=self.mpc_R),
             stanley=StanleyController(k=self.stanley_k, model=model),
-            curvature_estimator=CurvatureEstimator(lookahead=self.curv_lookahead),
+            curvature_estimator=curv_est,
             warmup_steps=self.warmup_steps,
             warmup_ctrl=self.warmup_ctrl,
             straight_ctrl=self.straight_ctrl,
             curve_ctrl=self.curve_ctrl,
             fallback_ctrl=self.fallback_ctrl,
+            confirm_steps=self.confirm_steps,
+            blend_window=self.blend_window,
+            log_fn=self.get_logger().info,
         )
 
     def _init_state(self):
