@@ -11,6 +11,8 @@ On every controller switch:
 import numpy as np
 from typing import List, Dict
 
+from ..controllers.mpc import MPCController
+
 
 def handoff(incoming_controller, x_curr: np.ndarray,
             trajectory: List[Dict], ref_idx: int) -> None:
@@ -23,7 +25,7 @@ def handoff(incoming_controller, x_curr: np.ndarray,
         trajectory: full reference trajectory
         ref_idx: current index in trajectory
     """
-    if type(incoming_controller).__name__ == 'MPCController':
+    if isinstance(incoming_controller, MPCController):
         _handoff_mpc(incoming_controller, x_curr, trajectory, ref_idx)
     # LQR and Stanley are stateless — no initialization needed
 
