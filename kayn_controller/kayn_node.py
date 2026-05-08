@@ -25,7 +25,7 @@ from ackermann_msgs.msg import AckermannDriveStamped
 from std_msgs.msg import Bool, String, Float32
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from giu_f1t_interfaces.msg import VehicleStateArray
-from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 
 try:
     from tf_transformations import euler_from_quaternion
@@ -159,11 +159,14 @@ class KAYNNode(Node):
         self._last_block = None
 
     def _setup_subs(self):
-        sensor_qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
-                                durability=DurabilityPolicy.VOLATILE, depth=10)
+        qos_profile = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+        )
         rel_qos = QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
                              durability=DurabilityPolicy.VOLATILE, depth=10)
-        self.create_subscription(Odometry, self.odom_topic, self._odom_cb, sensor_qos)
+        self.create_subscription(Odometry, self.odom_topic, self._odom_cb, qos_profile)
         self.create_subscription(VehicleStateArray, self.traj_topic, self._traj_cb, rel_qos)
         self.create_subscription(Bool, self.ready_topic, self._ready_cb, rel_qos)
 
