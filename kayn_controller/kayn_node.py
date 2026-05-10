@@ -40,6 +40,7 @@ from .controllers.bicycle_model import BicycleModel
 from .controllers.lqr import LQRController
 from .controllers.mpc import MPCController
 from .controllers.stanley import StanleyController
+from .controllers.params import WHEELBASE, DELTA_MAX, A_MAX, V_MAX
 from .supervisor.curvature import CurvatureEstimator
 from .supervisor.fsm import FSM
 
@@ -67,7 +68,7 @@ class KAYNNode(Node):
 
     def _declare_params(self):
         p = self.declare_parameter
-        p('wheelbase', 0.33);         p('dt', 0.02)
+        p('wheelbase', WHEELBASE);    p('dt', 0.02)
         p('lqr.q_px', 5.0);          p('lqr.q_py', 5.0)
         p('lqr.q_theta', 6.0);       p('lqr.q_v', 1.0)
         p('lqr.r_delta', 4.0);       p('lqr.r_a', 0.3)
@@ -86,7 +87,7 @@ class KAYNNode(Node):
         p('fsm.lookahead', 10)
         p('fsm.v_warmup_min', 0.2);  p('fsm.v_stop', 0.05)
         p('fsm.stop_confirm_steps', 20)
-        p('max_speed', 8.0);         p('max_steering', 0.4189); p('max_accel', 5.0)
+        p('max_speed', V_MAX);       p('max_steering', DELTA_MAX); p('max_accel', A_MAX)
         p('control_hz', 50.0)
         p('odom_topic', '/odom')
         p('trajectory_topic', '/horizon_mapper/reference_trajectory')
@@ -140,7 +141,10 @@ class KAYNNode(Node):
         self.curve_speed_scale    = self._p('curve_speed_scale')
 
     def _build_controllers(self):
-        model = BicycleModel(L=self.wheelbase, dt=self.dt)
+        model = BicycleModel(L=self.wheelbase, dt=self.dt,
+                             delta_max=self.max_steering,
+                             a_max=self.max_accel,
+                             v_max=self.max_speed)
         curv_est = CurvatureEstimator(
             lookahead=self.curv_lookahead,
             enter_threshold=self.enter_threshold,

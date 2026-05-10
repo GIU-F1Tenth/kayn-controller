@@ -10,7 +10,7 @@ Summary:
 
 import numpy as np
 import scipy.linalg
-from .bicycle_model import BicycleModel, DELTA_MAX, A_MAX
+from .bicycle_model import BicycleModel
 
 
 class LQRController:
@@ -62,6 +62,6 @@ class LQRController:
         e[2] = self.model.normalize_angle(e[2])
 
         u = u_ref - self._cached_K @ e
-        u[0] = np.clip(u[0], -DELTA_MAX, DELTA_MAX)
-        u[1] = np.clip(u[1], -A_MAX, A_MAX)
+        u[0] = np.clip(u[0], -self.model.delta_max, self.model.delta_max)
+        u[1] = np.clip(u[1], -self.model.a_max,     self.model.a_max)
         return u

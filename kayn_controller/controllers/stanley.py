@@ -15,7 +15,7 @@ e_fa > 0 (left of track) requires negative delta (steer right). Using plus sign 
 
 import numpy as np
 from typing import List, Dict
-from .bicycle_model import BicycleModel, DELTA_MAX
+from .bicycle_model import BicycleModel
 
 
 class StanleyController:
@@ -34,7 +34,7 @@ class StanleyController:
 
     def compute_control(self, x_curr: np.ndarray,
                         trajectory: List[Dict]) -> float:
-        """Return steering angle [rad] clipped to [-DELTA_MAX, DELTA_MAX]."""
+        """Return steering angle [rad] clipped to model.delta_max."""
         fa = self.model.front_axle_pos(x_curr)
         idx = self._find_closest_idx(fa, trajectory)
         wp = trajectory[idx]
@@ -55,4 +55,4 @@ class StanleyController:
         cte_term = np.arctan2(self.k * e_fa, v + self.epsilon)
         delta = psi_e - cte_term
 
-        return float(np.clip(delta, -DELTA_MAX, DELTA_MAX))
+        return float(np.clip(delta, -self.model.delta_max, self.model.delta_max))

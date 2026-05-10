@@ -1,9 +1,8 @@
 """
 Kinematic Bicycle Model
-=======================
 
-State:  x = [px, py, theta, v]
-Input:  u = [delta, a]
+State  x = [px, py, theta, v]
+Input  u = [delta, a]
 
 Continuous dynamics:
     px_dot    = v * cos(theta)
@@ -11,49 +10,46 @@ Continuous dynamics:
     theta_dot = v * tan(delta) / L
     v_dot     = a
 
-Jacobians (for LQR linearization):
+Jacobians used by LQR linearize():
     A = df/dx:
-        [0, 0, -v*sin(theta),  cos(theta)      ]
-        [0, 0,  v*cos(theta),  sin(theta)      ]
-        [0, 0,  0,             tan(delta)/L    ]
-        [0, 0,  0,             0               ]
+        [ 0  0  -v*sin(theta)  cos(theta)   ]
+        [ 0  0   v*cos(theta)  sin(theta)   ]
+        [ 0  0   0             tan(delta)/L ]
+        [ 0  0   0             0            ]
 
     B = df/du:
-        [0,                           0]
-        [0,                           0]
-        [v / (L * cos(delta)^2),      0]
-        [0,                           1]
+        [ 0                        0 ]
+        [ 0                        0 ]
+        [ v / (L * cos(delta)^2)   0 ]
+        [ 0                        1 ]
 
-Discretized via forward Euler (accurate for dt <= 0.02s):
+Discrete Jacobians (forward Euler, accurate for dt ≤ 0.02 s):
     A_d = I + A * dt
     B_d = B * dt
 """
 
 import numpy as np
 
-
-L_DEFAULT = 0.33       # F1TENTH wheelbase [m]
-DELTA_MAX = 0.41888  # max steering angle [rad] = 24 deg exactly
-A_MAX = 5.0            # max acceleration magnitude [m/s^2]
-V_MAX = 8.0            # max speed [m/s]
+from .params import WHEELBASE, DELTA_MAX, A_MAX, V_MAX  # noqa: F401 — re-exported for callers
 
 
 class BicycleModel:
     """
-    Kinematic bicycle model for F1TENTH.
-
-    IMPORTANT: This class does NOT clip inputs to physical limits.
-    Callers (LQR, MPC, Stanley) are responsible for clamping
-    delta to [-DELTA_MAX, DELTA_MAX] and a to [-A_MAX, A_MAX]
-    before calling step_rk4() or linearize().
+    Callers are responsible for clamping inputs to [-DELTA_MAX, DELTA_MAX]
+    and [-A_MAX, A_MAX] — this class does not clip.
     """
 
-    def __init__(self, L: float = L_DEFAULT, dt: float = 0.02):
-        self.L = L
-        self.dt = dt
+    def __init__(self, L: float = WHEELBASE, dt: float = 0.02,
+                 delta_max: float = DELTA_MAX,
+                 a_max: float = A_MAX,
+                 v_max: float = V_MAX):
+        self.L         = L
+        self.dt        = dt
+        self.delta_max = delta_max
+        self.a_max     = a_max
+        self.v_max     = v_max
 
     def f(self, x: np.ndarray, u: np.ndarray) -> np.ndarray:
-        """Continuous dynamics xdot = f(x, u)."""
         px, py, theta, v = x
         delta, a = u
         return np.array([
@@ -64,7 +60,6 @@ class BicycleModel:
         ])
 
     def step_rk4(self, x: np.ndarray, u: np.ndarray) -> np.ndarray:
-        """Integrate one timestep with RK4."""
         dt = self.dt
         k1 = self.f(x, u)
         k2 = self.f(x + dt / 2 * k1, u)
@@ -73,11 +68,7 @@ class BicycleModel:
         return x + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
 
     def linearize(self, x_ref: np.ndarray, u_ref: np.ndarray):
-        """
-        Discrete Jacobians around (x_ref, u_ref).
-        Returns (A_d, B_d) each as numpy arrays.
-        A_d: (4, 4)   B_d: (4, 2)
-        """
+        """Return discrete Jacobians (A_d, B_d) at (x_ref, u_ref)."""
         px, py, theta, v = x_ref
         delta, a = u_ref
 
@@ -96,9 +87,7 @@ class BicycleModel:
             [0,                                1],
         ])
 
-        A_d = np.eye(4) + A * self.dt
-        B_d = B * self.dt
-        return A_d, B_d
+        return np.eye(4) + A * self.dt, B * self.dt
 
     @staticmethod
     def normalize_angle(angle: float) -> float:
@@ -106,7 +95,7 @@ class BicycleModel:
         return (angle + np.pi) % (2 * np.pi) - np.pi
 
     def front_axle_pos(self, x: np.ndarray) -> np.ndarray:
-        """Return [px_front, py_front] — front axle position used by Stanley."""
+        """Return [px_front, py_front] — used by Stanley."""
         px, py, theta, v = x
         return np.array([
             px + self.L * np.cos(theta),

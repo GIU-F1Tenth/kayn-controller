@@ -41,7 +41,7 @@ if os.path.isdir(_ACADOS_LIB_DIR):
 from acados_template import AcadosOcp, AcadosOcpSolver, AcadosModel
 from casadi import MX, vertcat, cos, sin, tan
 
-from .bicycle_model import BicycleModel, DELTA_MAX, A_MAX, V_MAX
+from .bicycle_model import BicycleModel
 
 
 class MPCController:
@@ -50,17 +50,17 @@ class MPCController:
                  dt: float = None,
                  Q: np.ndarray = None,
                  R: np.ndarray = None,
-                 v_max: float = V_MAX):
+                 v_max: float = None):
         self.model = model
         self.N = N
         self.dt = dt or model.dt
+        self.v_max = v_max if v_max is not None else model.v_max
 
         # Q/R match kayn_params.yaml — high q_v (9.0) prevents curve over-speeding;
         # high r_delta (8.0) damps steering oscillations on straights.
         self.Q = Q if Q is not None else np.diag([7.0, 7.0, 5.0, 9.0])
         self.R = R if R is not None else np.diag([8.0, 0.3])
         self.P_f = 10.0 * self.Q  # terminal cost — heavier to prevent horizon-end drift
-        self.v_max = v_max
 
         self.solver = self._build_solver()
 
@@ -129,12 +129,10 @@ class MPCController:
         ocp.cost.yref   = np.zeros(nx + nu)
         ocp.cost.yref_e = np.zeros(nx)
 
-        # Control bounds: |delta| <= DELTA_MAX, |a| <= A_MAX
-        ocp.constraints.lbu    = np.array([-DELTA_MAX, -A_MAX])
-        ocp.constraints.ubu    = np.array([ DELTA_MAX,  A_MAX])
+        ocp.constraints.lbu    = np.array([-self.model.delta_max, -self.model.a_max])
+        ocp.constraints.ubu    = np.array([ self.model.delta_max,  self.model.a_max])
         ocp.constraints.idxbu  = np.array([0, 1])
 
-        # State bounds: 0 <= v <= v_max [m/s]
         ocp.constraints.lbx    = np.array([0.0])
         ocp.constraints.ubx    = np.array([self.v_max])
         ocp.constraints.idxbx  = np.array([3])
@@ -222,6 +220,6 @@ class MPCController:
         solve_time = time.perf_counter() - t0
 
         u = self.solver.get(0, 'u')
-        u[0] = np.clip(u[0], -DELTA_MAX, DELTA_MAX)
-        u[1] = np.clip(u[1], -A_MAX, A_MAX)
+        u[0] = np.clip(u[0], -self.model.delta_max, self.model.delta_max)
+        u[1] = np.clip(u[1], -self.model.a_max,     self.model.a_max)
         return u, solve_time, status

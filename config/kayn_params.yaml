@@ -57,9 +57,9 @@ kayn_controller_node:
     fsm.lookahead:       10    # waypoints ahead used for curvature estimate
 
     # ── Speed / limits ────────────────────────────────────────────────────────
-    max_speed:    8.0     # [m/s]   
-    max_steering: 0.4189  # [rad]   must match DELTA_MAX in bicycle_model.py (24°)
-    max_accel:    5.0     # [m/s²]  
+    max_speed:    8.0      # [m/s]
+    max_steering: 0.41888  # [rad]
+    max_accel:    5.0      # [m/s²]
 
     # ── Topics ────────────────────────────────────────────────────────────────
     odom_topic:       "/ego_racecar/odom"

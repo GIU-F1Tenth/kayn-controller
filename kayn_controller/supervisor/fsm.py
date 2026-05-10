@@ -31,7 +31,6 @@ from typing import List, Dict
 
 from .curvature import CurvatureEstimator
 from .state_handoff import handoff
-from ..controllers.bicycle_model import A_MAX
 
 _STANLEY_V_KP = 2.0  # proportional gain for Stanley speed control [1/s]
 
@@ -252,7 +251,8 @@ class FSM:
         else:  # stanley
             delta = self.stanley.compute_control(x_curr, trajectory)
             v_ref = trajectory[min(ref_idx, len(trajectory) - 1)]['v']
-            a = float(np.clip(_STANLEY_V_KP * (v_ref - x_curr[3]), -A_MAX, A_MAX))
+            a = float(np.clip(_STANLEY_V_KP * (v_ref - x_curr[3]),
+                              -self.stanley.model.a_max, self.stanley.model.a_max))
             return np.array([delta, a]), 0.0, 0
 
     def _transition(self, new_state: KAYNState, reason: str,
