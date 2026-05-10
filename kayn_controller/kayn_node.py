@@ -43,6 +43,8 @@ from .controllers.stanley import StanleyController
 from .supervisor.curvature import CurvatureEstimator
 from .supervisor.fsm import FSM
 
+_CURVE_STATES = {'CURVE', 'BLEND_OUT', 'BLEND_IN'}
+
 
 class KAYNNode(Node):
     def __init__(self):
@@ -89,6 +91,9 @@ class KAYNNode(Node):
         p('path_ready_topic', '/horizon_mapper/path_ready')
         p('drive_topic', '/kayn/drive')
         p('debug', False);            p('log_every_n', 25)
+        p('reverse_direction', False)
+        p('straight_speed_scale', 1.0)
+        p('curve_speed_scale',    1.0)
 
     def _load_params(self):
         self.wheelbase     = self._p('wheelbase')
@@ -124,7 +129,10 @@ class KAYNNode(Node):
         self.curv_lookahead = self._p('fsm.lookahead')
         self.enter_threshold = self._p('fsm.enter_threshold')
         self.exit_threshold  = self._p('fsm.exit_threshold')
-        self.mpc_timeout_s   = self._p('mpc.timeout_ms') / 1000.0
+        self.mpc_timeout_s      = self._p('mpc.timeout_ms') / 1000.0
+        self.reverse_direction  = self._p('reverse_direction')
+        self.straight_speed_scale = self._p('straight_speed_scale')
+        self.curve_speed_scale    = self._p('curve_speed_scale')
 
     def _build_controllers(self):
         model = BicycleModel(L=self.wheelbase, dt=self.dt)
@@ -183,8 +191,6 @@ class KAYNNode(Node):
         self.create_timer(1.0 / self.control_hz, self._control_cb)
         self.create_timer(1.0, self._diag_cb)
 
-    # ------------------------------------------------------------------
-
     def _odom_cb(self, msg: Odometry):
         try:
             p = msg.pose.pose.position
@@ -197,18 +203,24 @@ class KAYNNode(Node):
             self.get_logger().error(f"odom_cb: {e}")
 
     def _traj_cb(self, msg: VehicleStateArray):
-        self.trajectory = [
-            {'x': s.x, 'y': s.y, 'theta': s.theta, 'v': s.v}
-            for s in msg.states
-        ]
+        if self.reverse_direction:
+            self.trajectory = [
+                {'x': s.x, 'y': s.y,
+                 'theta': BicycleModel.normalize_angle(s.theta + math.pi),
+                 'v': s.v}
+                for s in msg.states
+            ]
+        else:
+            self.trajectory = [
+                {'x': s.x, 'y': s.y, 'theta': s.theta, 'v': s.v}
+                for s in msg.states
+            ]
 
     def _ready_cb(self, msg: Bool):
         prev = self.path_ready
         self.path_ready = msg.data
         if self.path_ready != prev:
             self.get_logger().info(f"Path ready: {self.path_ready}")
-
-    # ------------------------------------------------------------------
 
     def _control_cb(self):
         self._iter += 1
@@ -224,7 +236,13 @@ class KAYNNode(Node):
             pts = np.array([[wp['x'], wp['y']] for wp in self.trajectory])
             self.ref_idx = int(np.argmin(np.linalg.norm(pts - self.x_curr[:2], axis=1)))
 
-            u = self.fsm.step(self.x_curr, self.trajectory, self.ref_idx)
+            scale = (self.curve_speed_scale
+                     if self.fsm.state_name in _CURVE_STATES
+                     else self.straight_speed_scale)
+            traj = ([{**wp, 'v': wp['v'] * scale} for wp in self.trajectory]
+                    if scale != 1.0 else self.trajectory)
+
+            u = self.fsm.step(self.x_curr, traj, self.ref_idx)
             self._last_block = None
 
             # Drive command
@@ -234,7 +252,7 @@ class KAYNNode(Node):
             drive.drive.steering_angle = float(np.clip(u[0], -self.max_steering, self.max_steering))
             drive.drive.acceleration   = float(np.clip(u[1], -self.max_accel, self.max_accel))
             drive.drive.speed = float(np.clip(
-                self.trajectory[self.ref_idx]['v'], 0.0, self.max_speed))
+                traj[self.ref_idx]['v'], 0.0, self.max_speed))
             self._pub_drive.publish(drive)
 
             # Telemetry

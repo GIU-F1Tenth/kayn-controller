@@ -9,12 +9,12 @@ kayn_controller_node:
     # ── LQR ──────────────────────────────────────────────────────────────────
     # Q = diag([q_px, q_py, q_theta, q_v])  state error penalty
     # R = diag([r_delta, r_a])               control effort penalty
-    lqr.q_px:    6.0   # raise to track lateral position more aggressively
-    lqr.q_py:    6.0   # raise to penalise lateral drift on straights
-    lqr.q_theta: 8.0   # raise if car wanders angularly on straights
-    lqr.q_v:     2.0   # raise to track reference speed more closely
-    lqr.r_delta: 4.0   # raise to damp steering oscillations
-    lqr.r_a:     0.3   # raise for smoother acceleration profile
+    lqr.q_px:    6.0
+    lqr.q_py:    6.0
+    lqr.q_theta: 8.0
+    lqr.q_v:     2.0
+    lqr.r_delta: 4.0
+    lqr.r_a:     0.3
 
     # ── MPC ───────────────────────────────────────────────────────────────────
     # Same Q/R semantics as LQR.
@@ -25,8 +25,8 @@ kayn_controller_node:
     mpc.q_px:    7.0
     mpc.q_py:    7.0
     mpc.q_theta: 5.0
-    mpc.q_v:     9.0   # strong velocity tracking; prevents overspeeding on curves
-    mpc.r_delta: 8.0   # raise to smooth MPC steering on tight curves
+    mpc.q_v:     9.0   
+    mpc.r_delta: 8.0   
     mpc.r_a:     0.3
     mpc.timeout_ms: 7.0  # solver budget [ms]; exceeded → FSM enters FALLBACK
 
@@ -63,6 +63,14 @@ kayn_controller_node:
     trajectory_topic: "/horizon_mapper/reference_trajectory"
     path_ready_topic: "/horizon_mapper/path_ready"
     drive_topic:      "/drive"
+
+    # ── Speed scaling ─────────────────────────────────────────────────────────
+    straight_speed_scale: 1.0   # applied in WARMUP / STRAIGHT / FALLBACK states
+    curve_speed_scale:    1.0   # applied in CURVE / BLEND_OUT / BLEND_IN states
+    # 0.8 = 80 % of trajectory speed.
+
+    # ── Traversal direction ───────────────────────────────────────────────────
+    reverse_direction: true    # Mirror horizon_mapper's reverse_direction flag. 
 
     # ── Logging ───────────────────────────────────────────────────────────────
     debug:       false
