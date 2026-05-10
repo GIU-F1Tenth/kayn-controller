@@ -77,9 +77,19 @@ CONTROLLERS = ['stanley', 'lqr', 'mpc', 'kayn_fsm']
 # Helpers
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _closest_idx(x_curr: np.ndarray, trajectory: List[Dict]) -> int:
-    pts = np.array([[wp['x'], wp['y']] for wp in trajectory])
-    return int(np.argmin(np.linalg.norm(pts - x_curr[:2], axis=1)))
+def _closest_idx(x_curr: np.ndarray, trajectory: List[Dict],
+                  prev_idx: int = 0, search_window: int = 50) -> int:
+    """
+    Nearest-neighbour search within a forward window from prev_idx.
+    Prevents looped tracks (oval) from snapping ref_idx to the far end
+    of the track when the start and end waypoints are spatially close.
+    """
+    n = len(trajectory)
+    lo = prev_idx
+    hi = min(prev_idx + search_window, n)
+    pts = np.array([[trajectory[i]['x'], trajectory[i]['y']] for i in range(lo, hi)])
+    local_min = int(np.argmin(np.linalg.norm(pts - x_curr[:2], axis=1)))
+    return lo + local_min
 
 
 def _reset_mpc(mpc: MPCController, x0: np.ndarray, track: List[Dict]) -> None:
@@ -194,7 +204,7 @@ def run_scenario(scenario_name: str,
     ref_idx      = 0
 
     for _ in range(max_steps):
-        ref_idx = _closest_idx(x_curr, track)
+        ref_idx = _closest_idx(x_curr, track, prev_idx=prev_ref_idx)
 
         if ref_idx >= len(track) - 1:
             abort_reason = 'completed'
