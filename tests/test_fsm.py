@@ -179,3 +179,42 @@ def test_lqr_uses_curvature_feedforward(monkeypatch):
         "u_ref must not be None when curvature is non-zero"
     assert abs(received_u_ref[-1][0]) > 1e-4, \
         f"Expected non-zero feedforward steering on curve, got {received_u_ref[-1][0]:.6f}"
+
+
+def test_fsm_logs_transition_via_event():
+    """FSM must call logger.event() on state transitions."""
+    events = []
+
+    class _Logger:
+        def event(self, name, details='', level=None): events.append(name)
+        def warn(self, msg, level=None): pass
+
+    model = BicycleModel()
+    fsm = FSM(
+        lqr=LQRController(model),
+        mpc=MockMPC(),
+        stanley=StanleyController(model=model),
+        curvature_estimator=CurvatureEstimator(lookahead=10),
+        logger=_Logger(),
+    )
+    track = straight_track(length=200.0, v_ref=2.0, n_points=300)
+    x_curr = np.array([track[5]['x'], track[5]['y'], track[5]['theta'], 2.0])
+    for _ in range(WARMUP_STEPS + 1):
+        u = fsm.step(x_curr, track, 5)
+        x_curr = model.step_rk4(x_curr, u)
+
+    assert any("WARMUP" in e and "STRAIGHT" in e for e in events), \
+        f"Expected WARMUP → STRAIGHT transition event. Got: {events}"
+
+
+def test_fsm_plain_callable_logger_still_works():
+    """Passing a plain callable (e.g. print) as logger must not crash."""
+    calls = []
+    fsm = _make_fsm(logger=calls.append)
+    model = BicycleModel()
+    track = straight_track(length=200.0, v_ref=2.0, n_points=300)
+    x_curr = np.array([track[5]['x'], track[5]['y'], track[5]['theta'], 2.0])
+    for _ in range(WARMUP_STEPS + 1):
+        u = fsm.step(x_curr, track, 5)
+        x_curr = model.step_rk4(x_curr, u)
+    assert len(calls) > 0, "Transition must produce at least one log entry"
