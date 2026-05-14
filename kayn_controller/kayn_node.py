@@ -1,19 +1,5 @@
 #!/usr/bin/env python3
-"""
-KAYN Controller — ROS2 Node
-
-Subscribes:
-    /odom                                  nav_msgs/Odometry
-    /horizon_mapper/reference_trajectory   giu_f1t_interfaces/VehicleStateArray
-    /horizon_mapper/path_ready             std_msgs/Bool
-
-Publishes:
-    /kayn/drive             ackermann_msgs/AckermannDriveStamped
-    /kayn/mode              std_msgs/String
-    /kayn/cross_track_error std_msgs/Float32
-    /kayn/curvature         std_msgs/Float32
-    /kayn/diagnostics       diagnostic_msgs/DiagnosticArray
-"""
+""" KAYN Controller """
 
 import rclpy
 import numpy as np
@@ -27,15 +13,6 @@ from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from giu_f1t_interfaces.msg import VehicleStateArray
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 
-try:
-    from tf_transformations import euler_from_quaternion
-except ImportError:
-    def euler_from_quaternion(q):
-        x, y, z, w = q
-        siny = 2.0 * (w * z + x * y)
-        cosy = 1.0 - 2.0 * (y * y + z * z)
-        return 0.0, 0.0, math.atan2(siny, cosy)
-
 from .logger_utils import KAYNLogger, LogLevel
 from .controllers.bicycle_model import BicycleModel
 from .controllers.lqr import LQRController
@@ -45,21 +22,40 @@ from .controllers.params import WHEELBASE, DELTA_MAX, A_MAX, V_MAX
 from .supervisor.curvature import CurvatureEstimator
 from .supervisor.fsm import FSM
 
+try:
+    from tf_transformations import euler_from_quaternion
+except ImportError:
+    KAYNLogger(self, "Kayn").warn("tf_transformations not found -> using custom quaternion to euler conversion")
+    def euler_from_quaternion(q):
+        x, y, z, w = q
+        siny = 2.0 * (w * z + x * y)
+        cosy = 1.0 - 2.0 * (y * y + z * z)
+        return 0.0, 0.0, math.atan2(siny, cosy)
+
+
+
 _CURVE_STATES = {'CURVE', 'BLEND_OUT', 'BLEND_IN'}
 
 
 class _NullMPC:
     """Placeholder used when acados is unavailable; FSM never calls it after reconfiguration."""
     def compute_control(self, *args, **kwargs):
+        KAYNLogger(self, "MPC").error("Attempted to call MPC controller, but acados is not installed!")
         raise RuntimeError("acados unavailable — MPC must not be called")
 
 
 class KAYNNode(Node):
     def __init__(self):
         super().__init__('kayn_controller_node')
-        self._log = KAYNLogger(self, "KAYNNode")
+        self._log = KAYNLogger(self, "Kayn")
         self._declare_params()
         self._load_params()
+
+        try:
+            self._log.set_level(LogLevel.DEBUG if self.debug else LogLevel.NORMAL)
+        except Exception:
+            self._log.set_level(LogLevel.NORMAL)
+            
         self._build_controllers()
         self._init_state()
         self._setup_subs()
@@ -262,7 +258,7 @@ class KAYNNode(Node):
             self._block("path not ready"); return
         if self.x_curr is None:
             self._block("no odometry"); return
-        if len(self.trajectory) < 3:
+        if len(self.trajectory) < 5:
             self._block("trajectory too short"); return
 
         try:
@@ -322,6 +318,7 @@ class KAYNNode(Node):
         self._pub_drive.publish(drive)
 
     def _diag_cb(self):
+        if ()
         msg = DiagnosticArray()
         msg.header.stamp = self.get_clock().now().to_msg()
         s = DiagnosticStatus()
