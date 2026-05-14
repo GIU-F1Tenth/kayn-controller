@@ -18,14 +18,14 @@ kayn_controller_node:
 
     # ── MPC ───────────────────────────────────────────────────────────────────
     # Same Q/R semantics as LQR.
-    mpc.horizon_n:  20     # prediction steps; longer = better lookahead, slower solve
+    mpc.horizon_n:  15     # prediction steps; longer = better lookahead, slower solve
     mpc.dt:        0.04   # [s] prediction timestep — independent of control dt.
-                          #     horizon = N × mpc.dt = 20 × 0.04 = 0.8 s lookahead.
+                          #     horizon = N × mpc.dt = 25 × 0.04 = 1.0 s lookahead.
                           #     raise mpc.dt (not N) for longer lookahead without extra solve cost.
     mpc.q_px:    7.0
-    mpc.q_py:    7.0
+    mpc.q_py:    9.0
     mpc.q_theta: 5.0
-    mpc.q_v:     9.0   
+    mpc.q_v:     5.0   
     mpc.r_delta: 8.0   
     mpc.r_a:     0.3
     mpc.timeout_ms: 7.0  # solver budget [ms]; exceeded → FSM enters FALLBACK
