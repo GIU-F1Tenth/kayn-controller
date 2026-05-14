@@ -28,8 +28,11 @@ class KAYNLogger:
 
     def _set_log_level(self, level: str):
         try:
-            self.log_level = LogLevel(level.lower())
-        except ValueError:
+            if isinstance(level, LogLevel):
+                self.log_level = level
+            else:
+                self.log_level = LogLevel(level.lower())
+        except Exception:
             self.node.get_logger().warn(
                 f"[{self.component}] Invalid log level '{level}'. Using 'normal'."
             )
@@ -105,3 +108,7 @@ class KAYNLogger:
     def config(self, parameter: str, value, level: LogLevel = LogLevel.DEBUG):
         if self._should_log(level):
             self.node.get_logger().info(self._fmt(f"⚙️  CONFIG: {parameter} = {value}"))
+
+    def set_level(self, level):
+        """Public API to set logger level. Accepts either a LogLevel or string."""
+        self._set_log_level(level)
