@@ -72,6 +72,17 @@ kayn_controller_node:
     curve_speed_scale:    1.0   # applied in CURVE / BLEND_OUT / BLEND_IN states
     # 0.8 = 80 % of trajectory speed.
 
+    # ── Safety: Wobble detector ─────────────────────────────────────────────
+    safety.enable_wobble_detector: true
+    safety.max_lateral_accel: 3.0
+    safety.max_angular_velocity: 2.0
+    safety.steering_oscillation_threshold: 0.3
+    safety.wobble_time_threshold: 1.0
+    safety.wobble_history_size: 50
+    safety.wobble_min_samples: 10
+    safety.wobble_decel: 2.0
+    safety.wobble_steer_scale: 0.7
+
     # ── Traversal direction ───────────────────────────────────────────────────
     reverse_direction: true    # Mirror horizon_mapper's reverse_direction flag. 
 

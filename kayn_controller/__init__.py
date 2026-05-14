@@ -13,3 +13,5 @@ Publishes:
     /kayn/curvature         std_msgs/Float32
     /kayn/diagnostics       diagnostic_msgs/DiagnosticArray
 """
+
+from .supervisor.wobble_detector import WobbleDetector, WobbleParams

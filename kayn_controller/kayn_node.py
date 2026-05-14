@@ -19,6 +19,7 @@ from .controllers.stanley import StanleyController
 from .controllers.params import WHEELBASE, DELTA_MAX, A_MAX, V_MAX
 from .supervisor.curvature import CurvatureEstimator
 from .supervisor.fsm import FSM
+from .supervisor.wobble_detector import WobbleDetector, WobbleParams
 
 try:
     from tf_transformations import euler_from_quaternion
@@ -104,6 +105,15 @@ class KAYNNode(Node):
         p('publish_fsm_state', True)
         p('publish_curvature', False)
         p('publish_cross_track_error', False)
+        p('safety.enable_wobble_detector', True)
+        p('safety.max_lateral_accel', 3.0)
+        p('safety.max_angular_velocity', 2.0)
+        p('safety.steering_oscillation_threshold', 0.3)
+        p('safety.wobble_time_threshold', 1.0)
+        p('safety.wobble_history_size', 50)
+        p('safety.wobble_min_samples', 10)
+        p('safety.wobble_decel', 2.0)
+        p('safety.wobble_steer_scale', 0.7)
 
     def _load_params(self):
         self.wheelbase     = self._p('wheelbase')
@@ -125,6 +135,18 @@ class KAYNNode(Node):
         self.publish_fsm_state = self._p('publish_fsm_state')
         self.publish_curvature = self._p('publish_curvature')
         self.publish_cross_track_error = self._p('publish_cross_track_error')
+
+        self.enable_wobble_detector = self._p('safety.enable_wobble_detector')
+        self.wobble_params = WobbleParams(
+            max_lateral_accel=self._p('safety.max_lateral_accel'),
+            max_angular_velocity=self._p('safety.max_angular_velocity'),
+            steering_oscillation_threshold=self._p('safety.steering_oscillation_threshold'),
+            wobble_time_threshold=self._p('safety.wobble_time_threshold'),
+            history_size=self._p('safety.wobble_history_size'),
+            min_samples=self._p('safety.wobble_min_samples'),
+            wobble_decel=self._p('safety.wobble_decel'),
+            wobble_steer_scale=self._p('safety.wobble_steer_scale'),
+        )
 
         self.lqr_Q = np.diag([self._p('lqr.q_px'), self._p('lqr.q_py'),
                                self._p('lqr.q_theta'), self._p('lqr.q_v')])
@@ -202,6 +224,13 @@ class KAYNNode(Node):
         self.ref_idx    = 0
         self._iter      = 0
         self._last_block = None
+        self.yaw_rate = 0.0
+        self._wobble_active = False
+        self._wobble_detector = (
+            WobbleDetector(self.wobble_params, logger=KAYNLogger(self, "Wobble"))
+            if self.enable_wobble_detector
+            else None
+        )
 
     def _setup_subs(self):
         qos_profile = QoSProfile(
@@ -248,6 +277,7 @@ class KAYNNode(Node):
             _, _, yaw = euler_from_quaternion([q.x, q.y, q.z, q.w])
             vx = msg.twist.twist.linear.x
             vy = msg.twist.twist.linear.y
+            self.yaw_rate = msg.twist.twist.angular.z
             self.x_curr = np.array([p.x, p.y, yaw, math.sqrt(vx*vx + vy*vy)])
         except Exception as e:
             self._log.error("odom_cb", exception=e)
@@ -294,6 +324,26 @@ class KAYNNode(Node):
 
             u = self.fsm.step(self.x_curr, traj, self.ref_idx)
             self._last_block = None
+
+            if self._wobble_detector is not None:
+                now = self.get_clock().now().nanoseconds * 1e-9
+                self._wobble_detector.update(
+                    steering_angle=float(u[0]),
+                    angular_velocity=float(self.yaw_rate),
+                    velocity=float(self.x_curr[3]),
+                    timestamp=now,
+                )
+
+                wobbling = self._wobble_detector.is_wobbling()
+                if wobbling and not self._wobble_active:
+                    self._log.warn("Wobble detected — reducing steering and speed")
+                    self._wobble_active = True
+                elif not wobbling and self._wobble_active:
+                    self._log.info("Wobble cleared — restoring normal control")
+                    self._wobble_active = False
+
+                steer, accel = self._wobble_detector.apply_mitigation((u[0], u[1]))
+                u = np.array([steer, accel])
 
             kappa = None
             cte = None
