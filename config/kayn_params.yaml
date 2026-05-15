@@ -5,6 +5,16 @@ kayn_controller_node:
     wheelbase: 0.33        # [m]  kinematic model parameter
     dt: 0.005              # [s]  integration timestep; must equal 1 / control_hz
     control_hz: 200.0      # [Hz] control loop rate
+    
+    # ── Speed / limits ────────────────────────────────────────────────────────
+    max_speed:    9.0      # [m/s]
+    max_steering: 0.41888  # [rad]
+    max_accel:    6.0      # [m/s²]
+    
+    # ── Speed scaling ─────────────────────────────────────────────────────────
+    straight_speed_scale: 1.0   # applied in WARMUP / STRAIGHT / FALLBACK states
+    curve_speed_scale:    0.8  # applied in CURVE / BLEND_OUT / BLEND_IN states
+    # 0.75 = 75 % of trajectory speed.
 
     # ── LQR ──────────────────────────────────────────────────────────────────
     # Q = diag([q_px, q_py, q_theta, q_v])  state error penalty
@@ -18,26 +28,44 @@ kayn_controller_node:
 
     # ── MPC ───────────────────────────────────────────────────────────────────
     # Same Q/R semantics as LQR.
-    mpc.horizon_n:  28     # prediction steps; longer = better lookahead, slower solve
+    mpc.horizon_n:  26     # prediction steps; longer = better lookahead, slower solve
     mpc.dt:        0.06   # [s] prediction timestep — independent of control dt.
                           #     horizon = N × mpc.dt = 25 × 0.06 = 1.5 s lookahead.
                           #     raise mpc.dt (not N) for longer lookahead without extra solve cost.
-    mpc.q_px:    5.0
-    mpc.q_py:    6.0
-    mpc.q_theta: 9.0
-    mpc.q_v:     3.0
-    mpc.r_delta: 5.0
+    mpc.q_px:    5.5
+    mpc.q_py:    6.5
+    mpc.q_theta: 8.0
+    mpc.q_v:     2.5
+    mpc.r_delta: 5.5
     mpc.r_a:     0.4
-    mpc.timeout_ms: 6.0  # solver budget [ms]; exceeded → FSM enters FALLBACK
+    mpc.timeout_ms: 7.0  # solver budget [ms]; exceeded → FSM enters FALLBACK
 
     # ── Stanley ───────────────────────────────────────────────────────────────
-    stanley.k: 1.5       # cross-track gain; raise for tighter tracking, lower if oscillating
+    stanley.k: 1.8       # cross-track gain; raise for tighter tracking, lower if oscillating
+
+    # ── Pure Pursuit ──────────────────────────────────────────────────────────
+    pp.min_lookahead_distance: 0.8  # [m]
+    pp.max_lookahead_distance: 2.2  # [m]
+    pp.min_velocity: 2.2            # [m/s]
+    pp.max_velocity: 9.0            # [m/s]
+    pp.vel_division_factor: 1.0
+    pp.skidding_velocity_thresh: 0.3
+    pp.kp: 1.0
+    pp.kd: 0.1
+    pp.k_sigmoid: 8.0
+    pp.use_lateral_error_gamma_compensation: true
+    pp.lateral_error_compensation_gain: 0.4
+    pp.use_lateral_error_speed_reducer: true
+    pp.lateral_error_speed_reducer_gain: 2.0
+    pp.laser_base_link_length: 0.27
+    pp.enable_speed_capping: true
+    pp.speed_capping_topic: "/speed_capping"
 
     # ── FSM controller slots ──────────────────────────────────────────────────
     # Each FSM state runs an independently chosen controller.
-    # Valid values: "stanley" | "lqr" | "mpc"
+    # Valid values: "stanley" | "lqr" | "mpc" | "pp"
     fsm.warmup_controller:   "stanley"
-    fsm.straight_controller: "lqr"
+    fsm.straight_controller: "pp"
     fsm.curve_controller:    "mpc"
     fsm.fallback_controller: "stanley"
 
@@ -56,24 +84,14 @@ kayn_controller_node:
     fsm.exit_threshold:  0.06  # kappa below which STRAIGHT re-enters (R > 16.7 m)
     fsm.lookahead:       10    # waypoints ahead used for curvature estimate
 
-    # ── Speed / limits ────────────────────────────────────────────────────────
-    max_speed:    7.0      # [m/s]
-    max_steering: 0.41888  # [rad]
-    max_accel:    6.0      # [m/s²]
-
     # ── Topics ────────────────────────────────────────────────────────────────
     odom_topic:       "/ego_racecar/odom"
     trajectory_topic: "/horizon_mapper/reference_trajectory"
     path_ready_topic: "/horizon_mapper/path_ready"
     drive_topic:      "/drive"
 
-    # ── Speed scaling ─────────────────────────────────────────────────────────
-    straight_speed_scale: 0.9   # applied in WARMUP / STRAIGHT / FALLBACK states
-    curve_speed_scale:    0.75  # applied in CURVE / BLEND_OUT / BLEND_IN states
-    # 0.75 = 75 % of trajectory speed.
-
     # ── Safety: Wobble detector ─────────────────────────────────────────────
-    safety.enable_wobble_detector: false
+    safety.enable_wobble_detector: true
     safety.max_lateral_accel: 3.0
     safety.max_angular_velocity: 2.0
     safety.steering_oscillation_threshold: 0.3

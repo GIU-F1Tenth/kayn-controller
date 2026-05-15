@@ -10,7 +10,7 @@ Each state has an independently configurable controller slot (kayn_params.yaml):
   fsm.curve_controller    : controller run on curves           (default: mpc)
   fsm.fallback_controller : controller run when curve fails    (default: stanley)
 
-Valid values: "stanley" | "lqr" | "mpc"
+Valid values: "stanley" | "lqr" | "mpc" | "pp"
 
 Transition table:
   WARMUP    → STRAIGHT  : WARMUP_STEPS elapsed
@@ -46,7 +46,7 @@ CONFIRM_STEPS = 3       # consecutive samples needed to confirm a transition
 MPC_TIMEOUT_S = 0.005   # 5ms solver budget
 WARMUP_STEPS  = 50      # warmup steps before handing off to straight controller (1s at 50Hz)
 
-_VALID_CTRLS = {'stanley', 'lqr', 'mpc'}
+_VALID_CTRLS = {'stanley', 'lqr', 'mpc', 'pp'}
 
 
 class KAYNState(Enum):
@@ -59,7 +59,7 @@ class KAYNState(Enum):
 
 
 class FSM:
-    def __init__(self, lqr, mpc, stanley, curvature_estimator: CurvatureEstimator,
+    def __init__(self, lqr, mpc, stanley, pp, curvature_estimator: CurvatureEstimator,
                  warmup_steps: int = WARMUP_STEPS,
                  warmup_ctrl: str = 'stanley',
                  straight_ctrl: str = 'lqr',
@@ -81,6 +81,7 @@ class FSM:
         self.lqr      = lqr
         self.mpc      = mpc
         self.stanley  = stanley
+        self.pp       = pp
         self.curv_est = curvature_estimator
         self._warmup_steps       = warmup_steps
         self._warmup_ctrl        = warmup_ctrl
@@ -110,6 +111,8 @@ class FSM:
         self._blend_step     = 0
         self._recovery_count = 0
         self._stop_count     = 0
+        self.last_controller = None
+        self.last_speed_cmd = None
 
     def step(self, x_curr: np.ndarray, trajectory: List[Dict],
              ref_idx: int) -> np.ndarray:
@@ -296,6 +299,8 @@ class FSM:
             ref_slice = trajectory[ref_idx:]
             if len(ref_slice) < 2:
                 ref_slice = trajectory[-2:]
+            self.last_controller = 'mpc'
+            self.last_speed_cmd = None
             return self.mpc.compute_control(x_curr, ref_slice)
         elif name == 'lqr':
             try:
@@ -303,15 +308,31 @@ class FSM:
                 delta_ff = float(np.arctan(self.lqr.model.L * kappa))
                 u = self.lqr.compute_control(x_curr, self._ref_state(trajectory, ref_idx),
                                               np.array([delta_ff, 0.0]))
+                self.last_controller = 'lqr'
+                self.last_speed_cmd = None
                 return u, 0.0, 0
             except Exception as exc:
                 self._log.warn(f"[KAYN] LQR raised exception: {exc}")
+                self.last_controller = 'lqr'
+                self.last_speed_cmd = None
                 return np.zeros(2), 0.0, -1
+        elif name == 'pp':
+            delta = self.pp.compute_control(x_curr, trajectory, ref_idx)
+            v_ref = (self.pp.last_speed_cmd
+                     if self.pp.last_speed_cmd is not None
+                     else trajectory[min(ref_idx, len(trajectory) - 1)]['v'])
+            a = float(np.clip(_STANLEY_V_KP * (v_ref - x_curr[3]),
+                              -self.pp.model.a_max, self.pp.model.a_max))
+            self.last_controller = 'pp'
+            self.last_speed_cmd = self.pp.last_speed_cmd
+            return np.array([delta, a]), 0.0, 0
         else:  # stanley
             delta = self.stanley.compute_control(x_curr, trajectory)
             v_ref = trajectory[min(ref_idx, len(trajectory) - 1)]['v']
             a = float(np.clip(_STANLEY_V_KP * (v_ref - x_curr[3]),
                               -self.stanley.model.a_max, self.stanley.model.a_max))
+            self.last_controller = 'stanley'
+            self.last_speed_cmd = None
             return np.array([delta, a]), 0.0, 0
 
     def _safe_fallback_u(self, x_curr: np.ndarray,

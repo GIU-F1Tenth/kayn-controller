@@ -6,7 +6,7 @@ import traceback
 from rclpy.node import Node
 from nav_msgs.msg import Odometry
 from ackermann_msgs.msg import AckermannDriveStamped
-from std_msgs.msg import Bool, String, Float32
+from std_msgs.msg import Bool, String, Float32, Float64
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from giu_f1t_interfaces.msg import VehicleStateArray
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
@@ -16,6 +16,7 @@ from .controllers.bicycle_model import BicycleModel
 from .controllers.lqr import LQRController
 from .controllers.mpc import MPCController, ACADOS_AVAILABLE
 from .controllers.stanley import StanleyController
+from .controllers.pp import PurePursuitController
 from .controllers.params import WHEELBASE, DELTA_MAX, A_MAX, V_MAX
 from .supervisor.curvature import CurvatureEstimator
 from .supervisor.fsm import FSM
@@ -80,6 +81,22 @@ class KAYNNode(Node):
         p('mpc.q_theta', 6.0);       p('mpc.q_v', 1.0)
         p('mpc.r_delta', 4.0);       p('mpc.r_a', 0.3)
         p('stanley.k', 1.5)
+        p('pp.min_lookahead_distance', 0.8)
+        p('pp.max_lookahead_distance', 2.2)
+        p('pp.min_velocity', 0.0)
+        p('pp.max_velocity', V_MAX)
+        p('pp.vel_division_factor', 1.0)
+        p('pp.skidding_velocity_thresh', 0.0)
+        p('pp.kp', 1.0)
+        p('pp.kd', 0.1)
+        p('pp.k_sigmoid', 8.0)
+        p('pp.use_lateral_error_gamma_compensation', True)
+        p('pp.lateral_error_compensation_gain', 0.1)
+        p('pp.use_lateral_error_speed_reducer', True)
+        p('pp.lateral_error_speed_reducer_gain', 0.1)
+        p('pp.laser_base_link_length', 0.27)
+        p('pp.enable_speed_capping', False)
+        p('pp.speed_capping_topic', '/speed_capping')
         p('fsm.warmup_controller',   'stanley')
         p('fsm.straight_controller', 'lqr')
         p('fsm.curve_controller',    'mpc')
@@ -156,6 +173,22 @@ class KAYNNode(Node):
         self.mpc_R = np.diag([self._p('mpc.r_delta'), self._p('mpc.r_a')])
 
         self.stanley_k      = self._p('stanley.k')
+        self.pp_min_lad     = self._p('pp.min_lookahead_distance')
+        self.pp_max_lad     = self._p('pp.max_lookahead_distance')
+        self.pp_min_v       = self._p('pp.min_velocity')
+        self.pp_max_v       = self._p('pp.max_velocity')
+        self.pp_vel_div     = self._p('pp.vel_division_factor')
+        self.pp_skid_thresh = self._p('pp.skidding_velocity_thresh')
+        self.pp_kp          = self._p('pp.kp')
+        self.pp_kd          = self._p('pp.kd')
+        self.pp_k_sigmoid   = self._p('pp.k_sigmoid')
+        self.pp_use_lat_gamma = self._p('pp.use_lateral_error_gamma_compensation')
+        self.pp_lat_gamma_gain = self._p('pp.lateral_error_compensation_gain')
+        self.pp_use_lat_speed = self._p('pp.use_lateral_error_speed_reducer')
+        self.pp_lat_speed_gain = self._p('pp.lateral_error_speed_reducer_gain')
+        self.pp_laser_base_len = self._p('pp.laser_base_link_length')
+        self.pp_speed_cap_enabled = self._p('pp.enable_speed_capping')
+        self.pp_speed_cap_topic = self._p('pp.speed_capping_topic')
         self.warmup_ctrl    = self._p('fsm.warmup_controller')
         self.straight_ctrl  = self._p('fsm.straight_controller')
         self.curve_ctrl     = self._p('fsm.curve_controller')
@@ -197,10 +230,29 @@ class KAYNNode(Node):
             if ACADOS_AVAILABLE
             else _NullMPC()
         )
+        self._pp_ctrl = PurePursuitController(
+            model=model,
+            min_lookahead_distance=self.pp_min_lad,
+            max_lookahead_distance=self.pp_max_lad,
+            min_velocity=self.pp_min_v,
+            max_velocity=self.pp_max_v,
+            vel_division_factor=self.pp_vel_div,
+            skidding_velocity_thresh=self.pp_skid_thresh,
+            kp=self.pp_kp,
+            kd=self.pp_kd,
+            k_sigmoid=self.pp_k_sigmoid,
+            use_lateral_error_gamma_compensation=self.pp_use_lat_gamma,
+            lateral_error_compensation_gain=self.pp_lat_gamma_gain,
+            use_lateral_error_speed_reducer=self.pp_use_lat_speed,
+            lateral_error_speed_reducer_gain=self.pp_lat_speed_gain,
+            laser_base_link_length=self.pp_laser_base_len,
+            enable_speed_capping=self.pp_speed_cap_enabled,
+        )
         self.fsm = FSM(
             lqr=LQRController(model, Q=self.lqr_Q, R=self.lqr_R),
             mpc=mpc_ctrl,
             stanley=StanleyController(k=self.stanley_k, model=model),
+            pp=self._pp_ctrl,
             curvature_estimator=curv_est,
             warmup_steps=self.warmup_steps,
             warmup_ctrl=self.warmup_ctrl,
@@ -226,6 +278,7 @@ class KAYNNode(Node):
         self._last_block = None
         self.yaw_rate = 0.0
         self._wobble_active = False
+        self._speed_cap = None
         self._wobble_detector = (
             WobbleDetector(self.wobble_params, logger=KAYNLogger(self, "Wobble"))
             if self.enable_wobble_detector
@@ -243,6 +296,9 @@ class KAYNNode(Node):
         self.create_subscription(Odometry, self.odom_topic, self._odom_cb, qos_profile)
         self.create_subscription(VehicleStateArray, self.traj_topic, self._traj_cb, rel_qos)
         self.create_subscription(Bool, self.ready_topic, self._ready_cb, rel_qos)
+        if self.pp_speed_cap_enabled:
+            self.create_subscription(Float64, self.pp_speed_cap_topic,
+                                     self._speed_cap_cb, rel_qos)
 
     def _setup_pubs(self):
         qos = QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
@@ -354,8 +410,10 @@ class KAYNNode(Node):
             drive.header.frame_id = 'base_link'
             drive.drive.steering_angle = float(np.clip(u[0], -self.max_steering, self.max_steering))
             drive.drive.acceleration   = float(np.clip(u[1], -self.max_accel, self.max_accel))
-            drive.drive.speed = float(np.clip(
-                traj[self.ref_idx]['v'], 0.0, self.max_speed))
+            speed_ref = traj[self.ref_idx]['v']
+            if self.fsm.last_controller == 'pp' and self.fsm.last_speed_cmd is not None:
+                speed_ref = min(speed_ref, self.fsm.last_speed_cmd)
+            drive.drive.speed = float(np.clip(speed_ref, 0.0, self.max_speed))
             self._pub_drive.publish(drive)
 
             # Telemetry
@@ -400,6 +458,11 @@ class KAYNNode(Node):
         drive.header.stamp = self.get_clock().now().to_msg()
         drive.drive.speed = 0.0
         self._pub_drive.publish(drive)
+
+    def _speed_cap_cb(self, msg: Float64):
+        self._speed_cap = float(msg.data)
+        if self._pp_ctrl is not None:
+            self._pp_ctrl.set_speed_cap(self._speed_cap)
 
     def _diag_cb(self):
         msg = DiagnosticArray()
